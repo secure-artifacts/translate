@@ -13,6 +13,7 @@ import tkinter.font as tkfont
 from dataclasses import dataclass
 from ctypes import wintypes
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from tkinter import messagebox, ttk
 from urllib import parse, request
@@ -1339,7 +1340,22 @@ def api_keys(raw: str) -> list[str]:
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
-def read_http_json(url: str, payload: object | None = None, headers: dict | None = None, timeout: int = 30):
+def clean_http_error(code: int, detail: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", " ", detail or "")
+    cleaned = unescape(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    if code == 429:
+        return (
+            "Google 翻译请求被临时限制（HTTP 429）。"
+            "请稍后再试，或者在设置里切换到 AI 翻译 / Microsoft 翻译。"
+        )
+    if cleaned:
+        return f"HTTP {code}: {cleaned[:260]}"
+    return f"HTTP {code}: 翻译服务暂时不可用。"
+
+
+def read_http_text(url: str, payload: object | None = None, headers: dict | None = None, timeout: int = 30) -> str:
     data = None
     request_headers = {"User-Agent": "AI-Translator-App/1.0"}
     if headers:
@@ -1352,13 +1368,17 @@ def read_http_json(url: str, payload: object | None = None, headers: dict | None
     req = request.Request(url, data=data, headers=request_headers)
     try:
         with request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {detail[:400]}") from exc
+        raise RuntimeError(clean_http_error(exc.code, detail)) from exc
     except URLError as exc:
         raise RuntimeError(f"网络连接失败：{exc.reason}") from exc
 
+
+def read_http_json(url: str, payload: object | None = None, headers: dict | None = None, timeout: int = 30):
+    body = read_http_text(url, payload=payload, headers=headers, timeout=timeout)
     return json.loads(body)
 
 
@@ -1496,7 +1516,34 @@ def google_language_code(language_code: str) -> str:
     return GOOGLE_LANGUAGE_MAP.get(language_code, language_code)
 
 
-def google_translate(text: str, source_lang: str, target_lang: str) -> str:
+class GoogleMobileResultParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        classes = attrs_dict.get("class", "").split()
+        if tag == "div" and "result-container" in classes:
+            self._depth = 1
+        elif self._depth:
+            self._depth += 1
+
+    def handle_endtag(self, tag):
+        if self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._depth and data:
+            self.parts.append(data)
+
+    @property
+    def result(self) -> str:
+        return unescape("".join(self.parts)).strip()
+
+
+def google_translate_api(text: str, source_lang: str, target_lang: str, host: str) -> str:
     params = parse.urlencode(
         {
             "client": "gtx",
@@ -1506,12 +1553,71 @@ def google_translate(text: str, source_lang: str, target_lang: str) -> str:
             "q": text,
         }
     )
-    data = read_http_json(f"https://translate.googleapis.com/translate_a/single?{params}", timeout=20)
+    data = read_http_json(f"https://{host}/translate_a/single?{params}", timeout=20)
     parts = data[0] if data and isinstance(data, list) else []
     translated = "".join(part[0] for part in parts if part and part[0])
     if not translated:
         raise RuntimeError("Google 翻译没有返回内容")
     return translated
+
+
+def google_translate_mobile(text: str, source_lang: str, target_lang: str) -> str:
+    params = parse.urlencode(
+        {
+            "sl": google_language_code(source_lang),
+            "tl": google_language_code(target_lang),
+            "q": text,
+        }
+    )
+    body = read_http_text(
+        f"https://translate.google.com/m?{params}",
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36"
+            )
+        },
+        timeout=20,
+    )
+    parser = GoogleMobileResultParser()
+    parser.feed(body)
+    if not parser.result:
+        raise RuntimeError("Google 翻译备用接口没有返回内容")
+    return parser.result
+
+
+def google_translate(text: str, source_lang: str, target_lang: str) -> str:
+    errors = []
+    for host in ("translate.googleapis.com", "translate.google.com"):
+        try:
+            return google_translate_api(text, source_lang, target_lang, host)
+        except Exception as exc:
+            errors.append(str(exc))
+
+    try:
+        return google_translate_mobile(text, source_lang, target_lang)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    if any("HTTP 429" in error for error in errors):
+        raise RuntimeError(
+            "Google 翻译现在被临时限制（HTTP 429）。"
+            "请稍后再试，或在设置里切换到 AI 翻译 / Microsoft 翻译。"
+        )
+    raise RuntimeError("Google 翻译失败：" + "；".join(errors[-2:]))
+
+
+def google_translate_with_fallback(text: str, source_lang: str, target_lang: str, config: dict | None = None) -> tuple[str, str]:
+    try:
+        return google_translate(text, source_lang, target_lang), "Google"
+    except Exception as google_error:
+        config = config or {}
+        if (config.get("microsoft_key") or os.environ.get("MICROSOFT_TRANSLATOR_KEY") or "").strip():
+            try:
+                return microsoft_translate(text, source_lang, target_lang, config), "Google 失败，已改用 Microsoft"
+            except Exception:
+                pass
+        raise google_error
 
 
 MICROSOFT_LANGUAGE_MAP = {
@@ -1564,7 +1670,7 @@ def microsoft_translate(text: str, source_lang: str, target_lang: str, config: d
 def regular_translate(text: str, source_lang: str, target_lang: str, platform: str = "Google", config: dict | None = None) -> tuple[str, str]:
     if platform == "Microsoft":
         return microsoft_translate(text, source_lang, target_lang, config), "Microsoft"
-    return google_translate(text, source_lang, target_lang), "Google"
+    return google_translate_with_fallback(text, source_lang, target_lang, config)
 
 
 def translation_prompt(text: str, source_lang: str, target_lang: str, config: dict, back_translate: bool = False) -> str:

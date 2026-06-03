@@ -12,29 +12,29 @@ py -3 translator_app.py
 
 ## 发布与验证
 
-当前发布版本：`v2.3.0`
+当前发布版本：`v2.3.1`
 
-- 组织仓库 Release：https://github.com/secure-artifacts/translate/releases/tag/v2.3.0
-- 个人仓库 Release：https://github.com/ifghjb169-hash/translate/releases/tag/v2.3.0
-- 构建产物：`AI-Translate-Assistant-v2.3.0-win-x64.zip`
+- 组织仓库 Release：https://github.com/secure-artifacts/translate/releases/tag/v2.3.1
+- 个人仓库 Release：https://github.com/ifghjb169-hash/translate/releases/tag/v2.3.1
+- 构建产物：`AI-Translate-Assistant-v2.3.1-win-x64.zip`
 - 可执行文件：解压后运行 `AI-Translate-Assistant.exe`
 - 构建方式：GitHub Actions tag push 触发
 - 构建证明：Release 产物由 GitHub Actions 上传，并通过 GitHub Attestation API 验证
-- 组织仓库 SHA256：`d53a6374d6b9ec69d1b860d45d36b68b07f4926b32c0f08a3895165c897b0773`
-- 个人仓库 SHA256：`3b38f0a0521eaf21f2538abf2b950c6a5cc86aa4292445990b7a82dc068f49fe`
+- 组织仓库 SHA256：发布后填写
+- 个人仓库 SHA256：发布后填写
 
 验证方式：
 
 ```powershell
 # 下载 Release 产物后计算 SHA256
-Get-FileHash -Algorithm SHA256 .\AI-Translate-Assistant-v2.3.0-win-x64.zip
+Get-FileHash -Algorithm SHA256 .\AI-Translate-Assistant-v2.3.1-win-x64.zip
 ```
 
 也可以使用 GitHub CLI 验证软件来源：
 
 ```bash
-gh attestation verify ./AI-Translate-Assistant-v2.3.0-win-x64.zip --repo secure-artifacts/translate
-gh attestation verify ./AI-Translate-Assistant-v2.3.0-win-x64.zip --repo ifghjb169-hash/translate
+gh attestation verify ./AI-Translate-Assistant-v2.3.1-win-x64.zip --repo secure-artifacts/translate
+gh attestation verify ./AI-Translate-Assistant-v2.3.1-win-x64.zip --repo ifghjb169-hash/translate
 ```
 
 ## 已实现功能
@@ -48,6 +48,7 @@ gh attestation verify ./AI-Translate-Assistant-v2.3.0-win-x64.zip --repo ifghjb1
 - 顶部使用等尺寸导航按钮：翻译、设置、文字、直译。
 - 设置页支持窗口永远置顶。
 - 支持选择 `AI 翻译` 或 `Google 翻译`；Google 模式只使用 Google 翻译。
+- Google 翻译遇到临时限流时会尝试备用请求，并显示清晰错误提示，不再弹出 HTML 页面内容。
 - AI 模式支持 Gemini 和 Groq AI；选择 Gemini 时只显示并使用 Gemini API KEY，选择 Groq 时只显示并使用 Groq API KEY。
 - API KEY 可一行填写一个，并在当前密钥失败时自动尝试下一行。
 - 设置页填写的 AI 平台、API KEY、模型、国家特色和性别会保存到本地配置，下次打开不用重新填写。
